@@ -73,6 +73,31 @@ void KalmanFilter::predictionStep(GyroMeasurement gyro, double dt)
         // ----------------------------------------------------------------------- //
         // ENTER YOUR CODE HERE
 
+        // get the state information
+        double x = state(0);
+        double y = state(1);
+        double psi = state(2);
+        double V = state(3);
+        
+        // Predict the new state
+        double x_new = x + dt * V * cos(psi);
+        double y_new = y + dt * V * sin(psi);
+        double psi_new = wrapAngle(psi + dt * gyro.psi_dot); // wrap the angle to keep it within bounds
+        double V_new = V;
+        state << x_new,y_new,psi_new,V_new;
+
+        // Generate the F Matrix for the state for Covariance
+        MatrixXd F = Matrix4d::Zero();
+        F << 1,0,-dt*V*sin(psi),dt*cos(psi),0,1,dt*V*cos(psi),dt*sin(psi),0,0,1,0,0,0,0,1;
+
+        // Geenrate te Q Matrix for noise
+        MatrixXd Q = Matrix4d::Zero();
+        Q(2,2) = dt*dt*GYRO_STD*GYRO_STD;
+        Q(3,3) = dt*dt*ACCEL_STD*ACCEL_STD;
+
+        // Predict the new Covariance
+        cov = F * cov * F.transpose() + Q;
+
         // ----------------------------------------------------------------------- //
 
         setState(state);
