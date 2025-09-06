@@ -47,6 +47,42 @@ void KalmanFilter::handleLidarMeasurement(LidarMeasurement meas, const BeaconMap
         if (meas.id != -1 && map_beacon.id != -1)
         {           
             // The map matched beacon positions can be accessed using: map_beacon.x AND map_beacon.y
+
+            // Measurement Vector
+            Vector2d z = Vector2d::Zero();
+            z << meas.range, meas.theta;
+
+            // Predicted Measurement Vector (Measurement Model)
+            Vector2d z_hat = Vector2d::Zero();
+            double delta_x = map_beacon.x - state[0];
+            double delta_y = map_beacon.y - state[1];
+            double zhat_range = sqrt(delta_x*delta_x + delta_y*delta_y);
+            double zhat_theta = wrapAngle(atan2(delta_y,delta_x) - state[2]);
+            z_hat << zhat_range, zhat_theta;
+
+            // Measurement Model Sensitivity Matrix H
+            MatrixXd H = MatrixXd(2,4);
+            H << -delta_x/zhat_range,-delta_y/zhat_range,0,0,delta_y/zhat_range/zhat_range,-delta_x/zhat_range/zhat_range,-1,0;
+
+            // Generate Measurement Model Noise Covariance Matrix R
+            Matrix2d R = Matrix2d::Zero();
+            R(0,0) = LIDAR_RANGE_STD*LIDAR_RANGE_STD;
+            R(1,1) = LIDAR_THETA_STD*LIDAR_THETA_STD;
+
+            // Get the innovation/residual
+            Vector2d y = z - z_hat;
+            // Get the innovation covariance
+            Matrix2d S = H * cov * H.transpose() + R;
+
+            // Get the Kalman Gain
+            MatrixXd K = cov*H.transpose()*S.inverse();
+
+            // Wrap the Heading Innovation
+            y(1) = wrapAngle(y(1));
+
+            // Update State and Covariance
+            state = state + K*y;
+            cov = (Matrix4d::Identity() - K*H) * cov;
         }
 
         // ----------------------------------------------------------------------- //
