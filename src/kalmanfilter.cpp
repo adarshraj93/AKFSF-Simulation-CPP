@@ -11,10 +11,10 @@
 
 // -------------------------------------------------- //
 // YOU CAN USE AND MODIFY THESE CONSTANTS HERE
-constexpr double ACCEL_STD = 0.05;
+constexpr double ACCEL_STD = 1.0;
 constexpr double GYRO_STD = 0.01/180.0 * M_PI;
-constexpr double INIT_VEL_STD = 2;
-constexpr double INIT_PSI_STD = 5.0/180.0 * M_PI;
+constexpr double INIT_VEL_STD = 10.0;
+constexpr double INIT_PSI_STD = 45.0/180.0 * M_PI;
 constexpr double GPS_POS_STD = 3.0;
 constexpr double LIDAR_RANGE_STD = 3.0;
 constexpr double LIDAR_THETA_STD = 0.02;
@@ -39,6 +39,18 @@ std::vector<VectorXd> generateSigmaPoints(VectorXd state, MatrixXd cov)
     // ----------------------------------------------------------------------- //
     // ENTER YOUR CODE HERE
 
+    int numStates = state.size();
+    double lambda = 3.0 - numStates;
+    MatrixXd sqrtCov = cov.llt().matrixL();
+    sigmaPoints.push_back(state); // First Sigma Point is the Mean State
+
+    // Loop through to get the other points
+    for (int i = 0; i < numStates; i++)
+    {
+        sigmaPoints.push_back(state + sqrt(numStates + lambda) * sqrtCov.col(i));
+        sigmaPoints.push_back(state - sqrt(numStates + lambda) * sqrtCov.col(i));
+    }
+
     // ----------------------------------------------------------------------- //
 
     return sigmaPoints;
@@ -50,6 +62,17 @@ std::vector<double> generateSigmaWeights(unsigned int numStates)
 
     // ----------------------------------------------------------------------- //
     // ENTER YOUR CODE HERE
+
+    double lambda = 3.0 - numStates;
+    double w0 = lambda / (numStates + lambda);
+    double wi = 0.5 / (numStates + lambda);
+    weights.push_back(w0); // First Weight
+
+    // Loop through to get the other weights
+    for (int i = 0; i < 2 * numStates; i++)
+    {
+        weights.push_back(wi);
+    }
 
     // ----------------------------------------------------------------------- //
 
@@ -74,6 +97,20 @@ VectorXd vehicleProcessModel(VectorXd aug_state, double psi_dot, double dt)
 
     // ----------------------------------------------------------------------- //
     // ENTER YOUR CODE HERE
+
+    // Decompose the augmented state
+    double x = aug_state(0);
+    double y = aug_state(1);
+    double psi = aug_state(2);
+    double V = aug_state(3);
+    double psi_dot_noise = aug_state(4);
+    double accel_noise = aug_state(5);
+
+    // Predict the new state based on the process model
+    new_state(0) = x + V * cos(psi) * dt;
+    new_state(1) = y + V * sin(psi) * dt;
+    new_state(2) = psi + (psi_dot + psi_dot_noise) * dt;
+    new_state(3) = V + accel_noise * dt;
 
     // ----------------------------------------------------------------------- //
 
@@ -129,7 +166,50 @@ void KalmanFilter::predictionStep(GyroMeasurement gyro, double dt)
         // ----------------------------------------------------------------------- //
         // ENTER YOUR CODE HERE
 
+        // Generate the Q Matrix for the process noise
+        Matrix2d Q = Matrix2d::Zero();
+        Q(0,0) = GYRO_STD*GYRO_STD;
+        Q(1,1) = ACCEL_STD*ACCEL_STD;
 
+        // Augment State Vector and Covariance with Noise States
+        // There are 2 noise states: YAW RATE NOISE, ACCELERATION NOISE
+        int n_x = state.size();
+        int n_w = 2; // Number of Noise States
+        int n_aug = n_x + n_w; // Total Number of Augmented States
+        VectorXd x_aug = VectorXd::Zero(n_aug); // Augmented State Vector
+        MatrixXd P_aug = MatrixXd::Zero(n_aug, n_aug); // Augmented Covariance Matrix
+
+        // Set the Augmented State and Covariance
+        x_aug.head(n_x) = state;
+        P_aug.topLeftCorner(n_x,n_x) = cov;
+        P_aug.bottomRightCorner(n_w,n_w) = Q;
+
+        // Generate Augmented Sigma Points and Weights
+        std::vector<VectorXd> sigma_points = generateSigmaPoints(x_aug, P_aug);
+        std::vector<double> sigma_weights = generateSigmaWeights(n_aug);
+
+        // Predict Augmented Sigma Points
+        std::vector<VectorXd> sigma_points_predict;
+        for (const auto& sigma_point : sigma_points)
+        {
+            sigma_points_predict.push_back(vehicleProcessModel(sigma_point, gyro.psi_dot, dt));
+        }
+
+        // Calculate Mean
+        state = VectorXd::Zero(n_x);
+        for (int i = 0; i < sigma_points_predict.size(); ++i)
+        {
+            state += sigma_weights[i] * sigma_points_predict[i];
+        }
+        state = normaliseState(state);
+
+        // Calculate Covariance
+        cov = MatrixXd::Zero(n_x,n_x);
+        for (int i = 0; i < sigma_points_predict.size(); ++i)
+        {
+            VectorXd diff = normaliseState(sigma_points_predict[i] - state);
+            cov += sigma_weights[i] * diff * diff.transpose();
+        }
         // ----------------------------------------------------------------------- //
 
         setState(state);
