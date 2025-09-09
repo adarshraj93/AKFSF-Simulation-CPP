@@ -85,6 +85,23 @@ VectorXd lidarMeasurementModel(VectorXd aug_state, double beaconX, double beacon
 
     // ----------------------------------------------------------------------- //
     // ENTER YOUR CODE HERE
+    
+    // Get the augmented state
+    double x = aug_state(0);
+    double y = aug_state(1);
+    double psi = aug_state(2);
+    double V = aug_state(3);
+    double range_noise = aug_state(4);
+    double theta_noise = aug_state(5);
+
+    double delta_x = beaconX - x;
+    double delta_y = beaconY - y;
+
+    // Calculate the expected measurement
+    double zhat_range = sqrt((delta_x * delta_x) + (delta_y * delta_y)) + range_noise;
+    double zhat_theta = atan2(delta_y, delta_x) - psi + theta_noise;
+
+    z_hat << zhat_range, zhat_theta;
 
     // ----------------------------------------------------------------------- //
 
@@ -139,8 +156,69 @@ void KalmanFilter::handleLidarMeasurement(LidarMeasurement meas, const BeaconMap
         BeaconData map_beacon = map.getBeaconWithId(meas.id); // Match Beacon with built in Data Association Id
         if (meas.id != -1 && map_beacon.id != -1) // Check that we have a valid beacon match
         {
-           
+            // Generate the Measurement Vector for the Lidar Measurement
+            VectorXd z = Vector2d::Zero();
+            z << meas.range, meas.theta;
 
+            // Generate the Measreurement Model Noise Covariance Matrix
+            Matrix2d R = Matrix2d::Zero();
+            R(0,0) = LIDAR_RANGE_STD * LIDAR_RANGE_STD;
+            R(1,1) = LIDAR_THETA_STD * LIDAR_THETA_STD;
+
+            // Augent the State and Covariance with the Noise States
+            // There are 2 noise states: RANGE NOISE, BEARING NOISE
+            int n_x = state.size();
+            int n_z = 2; // Measurement Dimension (Range, Theta)
+            int n_v = 2; // Number of Noise States
+            int n_aug = n_x + n_v; // Total Number of Augmented States
+            VectorXd x_aug = VectorXd::Zero(n_aug); // Augmented State Vector
+            MatrixXd P_aug = MatrixXd::Zero(n_aug, n_aug); // Augmented Covariance Matrix
+
+            // Set the Augmented State and Covariance
+            x_aug.head(n_x) = state;
+            P_aug.topLeftCorner(n_x,n_x) = cov; // Current State Covariance
+            P_aug.bottomRightCorner(n_v,n_v) = R; // Measurement Noise Covariance
+
+            // generate Augmented Sigma Points and Weights
+            std::vector<VectorXd> sigma_points = generateSigmaPoints(x_aug, P_aug);
+            std::vector<double> sigma_weights = generateSigmaWeights(n_aug);
+
+            // Transform Sigma Points with Lidar Measurement Model
+            std::vector<VectorXd> z_sig;
+            for (const auto& sigma_point : sigma_points)
+            {
+                z_sig.push_back(lidarMeasurementModel(sigma_point, map_beacon.x, map_beacon.y));
+            }
+
+            // Calculate Predicted Measurement Mean
+            VectorXd z_mean = Vector2d::Zero(n_z);
+            for(unsigned int i = 0; i < z_sig.size(); ++i)
+            {
+                z_mean += sigma_weights[i] * z_sig[i];
+            }
+
+            // Calculate Innovation Covariance Matrix
+            MatrixXd Sk = Matrix2d::Zero(n_z,n_z);
+            for(unsigned int i = 0; i < z_sig.size(); ++i)
+            {
+                VectorXd diff = normaliseLidarMeasurement(z_sig[i] - z_mean);
+                Sk += sigma_weights[i] * diff * diff.transpose();
+            }
+
+            // Calculate Cross Covariance Matrix
+            MatrixXd Pxy = MatrixXd::Zero(n_x, n_z);
+            for(unsigned int i = 0; i < 2*n_x + 1; ++i)
+            {
+                VectorXd x_diff = normaliseState(sigma_points[i].head(n_x) - state);
+                VectorXd z_diff = normaliseLidarMeasurement(z_sig[i] - z_mean);
+                Pxy += sigma_weights[i] * x_diff * z_diff.transpose();
+            }
+
+            // Implement the UKF Update Equations
+            MatrixXd K = Pxy * Sk.inverse(); // Kalman Gain
+            VectorXd y = normaliseLidarMeasurement(z - z_mean); // Measurement Residual
+            state = state + K * y; // Updated State Mean
+            cov = cov - K * Sk * K.transpose(); // Updated State Covariance
         }
         // ----------------------------------------------------------------------- //
 
